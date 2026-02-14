@@ -202,7 +202,7 @@ class TemporalTransformerBlock(nn.Module):
             )
             norms.append(nn.LayerNorm(dim))
             
-        self.attention_blocks = nn.ModuleList(attention_blocks)
+        self.attention_blocks = nn.ModuleList(attention_blocks)    #时间注意力 (Self-Attention) 学会帧之间的注意力控制
         self.norms = nn.ModuleList(norms)
 
         self.ff = FeedForward(dim, dropout=dropout, activation_fn=activation_fn)

@@ -1,65 +1,115 @@
 # Adapted from https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/unet_2d_condition.py
 
+# 这是一个从2D条件UNet改编而来的3D条件UNet模型，专门用于视频生成任务
+# 原始的2D UNet用于图像生成，这里扩展到了3D以处理视频的时序维度
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Union
 
 import os
 import json
-import pdb
+import pdb # Python调试器，用于代码调试
 
 import torch
 import torch.nn as nn
-import torch.utils.checkpoint
+import torch.utils.checkpoint  # 梯度检查点技术，用于在训练时节省GPU内存
 
+# 导入diffusers库的相关模块
 from diffusers.configuration_utils import ConfigMixin, register_to_config
-from diffusers.modeling_utils import ModelMixin
-from diffusers.utils import BaseOutput, logging
+# ConfigMixin: 提供配置管理功能
+# register_to_config: 装饰器，用于将参数注册到模型配置中
+
+from diffusers.modeling_utils import ModelMixin # 模型混合类，提供基础模型功能
+from diffusers.utils import BaseOutput, logging # 基础输出类和日志工具
 from diffusers.models.embeddings import TimestepEmbedding, Timesteps
+# TimestepEmbedding: 时间步嵌入，将离散的时间步转换为连续向量
+# Timesteps: 时间步处理工具
+
+# 导入自定义的3D UNet块
 from .unet_blocks import (
-    CrossAttnDownBlock3D,
-    CrossAttnUpBlock3D,
-    DownBlock3D,
-    UNetMidBlock3DCrossAttn,
-    UpBlock3D,
-    get_down_block,
-    get_up_block,
+    CrossAttnDownBlock3D,  # 带交叉注意力的3D下采样块：用于下采样并处理文本条件
+    CrossAttnUpBlock3D,    # 带交叉注意力的3D上采样块：用于上采样并处理文本条件  
+    DownBlock3D,           # 普通3D下采样块：仅进行下采样，不处理文本条件
+    UNetMidBlock3DCrossAttn,# 3D中间块带交叉注意力：UNet最底部的块，连接编码器和解码器
+    UpBlock3D,             # 普通3D上采样块：仅进行上采样，不处理文本条件
+    get_down_block,        # 下采样块工厂函数：根据字符串名称创建对应的下采样块
+    get_up_block,          # 上采样块工厂函数：根据字符串名称创建对应的上采样块
 )
 from .resnet import InflatedConv3d, InflatedGroupNorm
+# InflatedConv3d: 3D卷积层，通过"膨胀"2D卷积权重来处理3D数据
+# InflatedGroupNorm: 3D组归一化层，适配3D输入数据
+
+logger = logging.get_logger(__name__)  # 获取当前模块的日志记录器，用于记录运行信息
 
 
-logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
-
-
-@dataclass
+@dataclass   # 数据类装饰器，自动生成__init__、__repr__等方法
 class UNet3DConditionOutput(BaseOutput):
-    sample: torch.FloatTensor
+    """
+    3D条件UNet模型的输出数据类
+    继承自BaseOutput,提供标准化的输出格式
+    
+    在视频生成中,这个类封装了UNet处理后的结果
+    属性:
+        sample: 去噪后的视频潜在表示，形状为 [batch_size, channels, frames, height, width]
+    """
+    sample: torch.FloatTensor  # 生成的样本张量，包含去噪后的视频信息
 
 
 class UNet3DConditionModel(ModelMixin, ConfigMixin):
+    """
+    3D条件UNet模型类 - 这是AnimateDiff项目的核心模型
+    
+    这个模型的作用：
+    - 接收噪声视频、时间步信息和文本嵌入
+    - 通过U型网络结构逐步去除噪声
+    - 输出去噪后的视频潜在表示
+    
+    继承说明：
+    - ModelMixin: 提供模型加载、保存等基础功能
+    - ConfigMixin: 提供配置管理功能，可以保存和加载模型配置
+    """
     _supports_gradient_checkpointing = True
+    # 声明支持梯度检查点，这是一种内存优化技术
+    # 在训练时只保存部分中间结果，用时间换空间
 
-    @register_to_config
+    @register_to_config  # 将初始化参数自动注册到模型配置中，便于保存和重现
     def __init__(
         self,
+        # ==================== 基础输入输出参数 ====================
         sample_size: Optional[int] = None,
+        # 输入样本的空间尺寸（高度/宽度），如果为None则支持可变尺寸
         in_channels: int = 4,
+        # 输入通道数：通常是4，对应VAE潜在空间的4个通道
         out_channels: int = 4,
+        # 输出通道数：通常也是4，与输入保持一致
         center_input_sample: bool = False,
+        # 是否对输入进行中心化：将[0,1]范围的输入转换为[-1,1]范围
         flip_sin_to_cos: bool = True,
-        freq_shift: int = 0,      
+        # 时间嵌入参数：是否将sin转换为cos，影响时间步的编码方式
+        freq_shift: int = 0,     
+        # 频率偏移：调整时间嵌入的频率成分
+         
+        # ==================== UNet结构块配置 ==================== 
         down_block_types: Tuple[str] = (
-            "CrossAttnDownBlock3D",
-            "CrossAttnDownBlock3D",
-            "CrossAttnDownBlock3D",
-            "DownBlock3D",
+            # 下采样块类型序列：定义UNet编码器（下采样路径）的结构
+            # 典型的配置：3个带交叉注意力的块 + 1个普通下采样块
+            "CrossAttnDownBlock3D", # 第1个块：高分辨率，处理细节
+            "CrossAttnDownBlock3D", # 第2个块：中等分辨率  
+            "CrossAttnDownBlock3D",# 第3个块：低分辨率
+            "DownBlock3D", # 第4个块：最低分辨率，不带注意力以节省计算
         ),
-        mid_block_type: str = "UNetMidBlock3DCrossAttn",
+        mid_block_type: str = "UNetMidBlock3DCrossAttn", # 中间块类型：UNet最底部的连接块，通常带交叉注意力
+
+
         up_block_types: Tuple[str] = (
-            "UpBlock3D",
-            "CrossAttnUpBlock3D",
-            "CrossAttnUpBlock3D",
-            "CrossAttnUpBlock3D"
+            # 上采样块类型序列：定义UNet解码器（上采样路径）的结构
+            # 通常与下采样路径对称但顺序相反
+            "UpBlock3D",          # 第1个块：最低分辨率，开始上采样
+            "CrossAttnUpBlock3D", # 第2个块：低分辨率，带注意力
+            "CrossAttnUpBlock3D", # 第3个块：中等分辨率，带注意力
+            "CrossAttnUpBlock3D"  # 第4个块：高分辨率，带注意力，输出最终结果
         ),
+
+        # ==================== 注意力机制参数 ====================
         only_cross_attention: Union[bool, Tuple[bool]] = False,
         block_out_channels: Tuple[int] = (320, 640, 1280, 1280),
         layers_per_block: int = 2,

@@ -39,7 +39,7 @@ css = """
 }
 """
 
-PRETRAINED_SD = "runwayml/stable-diffusion-v1-5"
+PRETRAINED_SD = "/home/yzj/anima/AnimateDiff/models/StableDiffusion"  # 第42行的常量定义"runwayml/stable-diffusion-v1-5"|"/home/yzj/anima/AnimateDiff/models/StableDiffusion"
 
 default_motion_module = "v3_sd15_mm.ckpt"
 default_inference_config = "configs/inference/inference-v3.yaml"

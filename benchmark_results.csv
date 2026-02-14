@@ -1,0 +1,11 @@
+Timestamp,Attack_Type,Params,Accuracy,BER,Extracted_Msg
+"1-a-back-view-of-a-boy,-standing-on-the-ground,.gif",No_Attack,{},1.0000,0.0000,My confidential message 123!
+"1-a-back-view-of-a-boy,-standing-on-the-ground,.gif",H264_CRF23,{'crf': 23},0.0000,1.0000,
+"1-a-back-view-of-a-boy,-standing-on-the-ground,.gif",No_Attack,{},1.0000,0.0000,My confidential message 123!
+"1-a-back-view-of-a-boy,-standing-on-the-ground,.gif",H264_CRF23,{'crf': 23},0.0000,1.0000,
+"1-a-back-view-of-a-boy,-standing-on-the-ground,.gif",No_Attack,{},1.0000,0.0000,My confidential message 123!
+"1-a-back-view-of-a-boy,-standing-on-the-ground,.gif",H264_CRF23,{'crf': 23},1.0000,0.0000,My confidential message 123!
+"1-a-back-view-of-a-boy,-standing-on-the-ground,.gif",H264_CRF28,{'crf': 28},0.9955,0.0045,My confidential message 023!
+"1-a-back-view-of-a-boy,-standing-on-the-ground,.gif",H264_CRF33,{'crf': 33},0.9688,0.0312,My confiDEftial mess g% !23!
+"1-a-back-view-of-a-boy,-standing-on-the-ground,.gif",FPS_8,{'target_fps': 8},0.5045,0.4955,0??????????? ?????(????? ?D?
+"1-a-back-view-of-a-boy,-standing-on-the-ground,.gif",Scaling_0.5,{'scale': 0.5},0.5446,0.4554,0?+????M%+?? ?????N8??????6?

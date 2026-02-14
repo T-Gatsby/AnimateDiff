@@ -107,7 +107,7 @@ def load_weights(
         auto_download(motion_module_path, is_dreambooth_lora=False)
 
         print(f"load motion module from {motion_module_path}")
-        motion_module_state_dict = torch.load(motion_module_path, map_location="cpu")
+        motion_module_state_dict = torch.load(motion_module_path, map_location="cpu")   #读取checkpoint
         motion_module_state_dict = motion_module_state_dict["state_dict"] if "state_dict" in motion_module_state_dict else motion_module_state_dict
         # filter parameters
         for name, param in motion_module_state_dict.items():
@@ -116,7 +116,8 @@ def load_weights(
             unet_state_dict.update({name: param})
         unet_state_dict.pop("animatediff_config", "")
     
-    missing, unexpected = animation_pipeline.unet.load_state_dict(unet_state_dict, strict=False)
+    missing, unexpected = animation_pipeline.unet.load_state_dict(unet_state_dict, strict=False)  #将这些权重填入UNet的Temporal Attention
+
     assert len(unexpected) == 0
     del unet_state_dict
 

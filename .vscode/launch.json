@@ -1,0 +1,21 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "🚀 调试 AnimateDiff（使用虚拟环境）",
+            "type": "python",
+            "request": "launch",
+            "module": "scripts.animate",
+            "args": [
+                "--config", "configs/prompts/1_animate/1_3_animate_ToonYou.yaml"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false,
+            "python": "/data/wj/anaconda3/envs/animatediff/bin/python",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            }
+        }
+    ]
+}
