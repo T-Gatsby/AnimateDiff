@@ -12,7 +12,9 @@ from animatediff.utils.stego import StegoProcessor
 from einops import rearrange
 from tqdm import tqdm
 from diffusers.utils.import_utils import is_xformers_available
-
+import torchvision.transforms.functional as TF
+from PIL import Image
+import torchvision.transforms.functional as TF
 # ==================== 新增: 修正的CLIP评估函数 ====================
 def simple_clip_evaluation(frames, prompt, reference_image=None, device="cuda"):
     """
@@ -125,10 +127,12 @@ def compare_with_paper(evaluation_results, embed_capacity=96):
         },
         192: {  # 192 bpf
             'text_alignment': 0.2918,
+            'domain_similarity': 0.7655,
             'video_consistency': 0.9312,
         },
         384: {  # 384 bpf
             'text_alignment': 0.2918,
+            'domain_similarity': 0.7655,
             'video_consistency': 0.9312,
         }
     }
@@ -190,29 +194,52 @@ def load_video_frames(video_path):
         print(f"读取视频失败: {e}")
         return None
 
-def load_video_latents(video_path, vae, device="cuda", dtype=torch.float16):
-    print(f"Loading video: {video_path}")
-    reader = imageio.get_reader(video_path)
-    frames = []
-    for frame in reader:
-        if frame.ndim == 3 and frame.shape[-1] == 4:
-            frame = frame[..., :3]
-        frames.append(frame)
-    frames = np.array(frames)
+def load_video_latents(video_path, vae, device="cuda", dtype=torch.float16, target_size=(512, 512), target_length=16):
+    """
+    增强版读取：自动处理分辨率不对齐和帧数不对齐的问题
+    """
+    try:
+        reader = imageio.get_reader(video_path)
+        frames = []
+        for frame in reader:
+            # 确保 RGB
+            if frame.ndim == 3 and frame.shape[-1] == 4:
+                frame = frame[..., :3]
+            frames.append(frame)
+    except Exception as e:
+        print(f"读取视频失败: {e}")
+        return None
+
+    # 1. 时序对齐 (FPS Fix): 强制重采样到 target_length (16帧)
+    current_frames = len(frames)
+    if current_frames != target_length:
+        # 简单线性采样
+        indices = np.linspace(0, current_frames - 1, target_length)
+        new_frames = []
+        for i in indices:
+            idx = int(round(i))
+            new_frames.append(frames[min(idx, current_frames-1)])
+        frames = np.array(new_frames)
+    else:
+        frames = np.array(frames)
+
+    # 2. 空间对齐 (Scaling Fix): 强制 Resize 到 (512, 512)
+    # 转为 Tensor: [F, H, W, C] -> [F, C, H, W]
+    video_tensor = torch.tensor(frames).permute(0, 3, 1, 2).float() / 255.0
     
-    # 归一化到 [-1, 1]
-    video_tensor = torch.tensor(frames).float() / 127.5 - 1.0
-    video_tensor = rearrange(video_tensor, "f h w c -> 1 c f h w")
-    video_tensor = video_tensor.to(device=device, dtype=dtype)
-    
-    b, c, f, h, w = video_tensor.shape
-    video_tensor_reshaped = rearrange(video_tensor, "b c f h w -> (b f) c h w")
+    if video_tensor.shape[2:] != target_size:
+        # 使用 interpolation 调整大小
+        video_tensor = TF.resize(video_tensor, target_size, antialias=True)
+
+    # 3. 归一化到 [-1, 1] 并编码
+    video_tensor = video_tensor * 2.0 - 1.0
+    video_tensor = rearrange(video_tensor, "f c h w -> 1 c f h w").to(device, dtype)
     
     with torch.no_grad():
-        latents = vae.encode(video_tensor_reshaped).latent_dist.sample()
+        latents = vae.encode(rearrange(video_tensor, "b c f h w -> (b f) c h w")).latent_dist.sample()
         latents = latents * 0.18215
         
-    latents = rearrange(latents, "(b f) c h w -> b c f h w", b=b, f=f)
+    latents = rearrange(latents, "(b f) c h w -> b c f h w", b=1, f=target_length)
     return latents
 
 @torch.no_grad()
@@ -348,7 +375,14 @@ def main(args):
     scheduler = DDIMScheduler(**OmegaConf.to_container(inference_config.noise_scheduler_kwargs))
     
     # 读取视频
-    latents = load_video_latents(args.video_path, vae, device, weight_dtype)
+    latents = load_video_latents(
+        args.video_path,
+        vae,
+        device,
+        weight_dtype,
+        target_size=(args.H, args.W), # 传入配置中的宽高
+        target_length=args.L          # 传入配置中的帧数
+    )
     
     # 编码 Prompt
     print(f"最终使用的Prompt: '{args.prompt}'")
@@ -364,11 +398,11 @@ def main(args):
     
     # 自适应DDIM逆向
     if video_idx < 2:
-        steps = 50
-        print(f"第一组视频（序号{video_idx}），使用50步DDIM反转")
+        steps = 25
+        print(f"第一组视频（序号{video_idx}），使用25步DDIM反转")
     else:
-        steps = 100
-        print(f"第二组视频（序号{video_idx}），使用100步DDIM反转")
+        steps = 25
+        print(f"第二组视频（序号{video_idx}），使用25步DDIM反转")
     
     recovered_noise = ddim_inversion_advanced(unet, scheduler, latents, steps, text_embeddings, device, weight_dtype)
     
@@ -519,52 +553,52 @@ def main(args):
                 print(f"\n当前物理嵌密容量: {target_bpf} bpf (论文对齐)")
                 
                 # 使用 target_bpf 作为基准去查表
-                embed_capacity = target_bpf
+                embed_capacity = target_bpfEmbed_capacity = target_bpf
                 
                 # 安全检查：如果没有对应基准，默认用 96 对比
-                if embed_capacity not in [96, 192, 384]:
-                    embed_capacity = 96
+                if embed_capacity not in [96, 192, 384]:如果embed_capacity不在[96,192,384]：
+                    embed_capacity = 96   Embed_capacity = 96
                 
-                print(f"使用论文基准容量: {embed_capacity} bpf 进行比对")
+                print(f"使用论文基准容量: {embed_capacity} bpf 进行比对")print   打印   打印(f"使用论文基准容量: {embed_capacity} bpf 进行比对")
                 
                 # 与论文结果比对
-                comparison_data = compare_with_paper(evaluation_results, embed_capacity=embed_capacity)
+                comparison_data = compare_with_paper(evaluation_results, embed_capacity=embed_capacity)Comparison_data = compare_with_paper（evaluation_results, embed_capacity=embed_capacity）
                 
                 # 保存评估结果
-                eval_output_file = os.path.join(video_dir, "quality_evaluation.txt")
-                with open(eval_output_file, 'w') as f:
+                eval_output_file = os.path.join(video_dir, "quality_evaluation.txt")Eval_output_file = os.path。加入(video_dir“quality_evaluation.txt")
+                with open(eval_output_file, 'w') as f:使用open（eval_output_file, 'w'）作为f：
                     f.write("视频质量评估结果\n")
                     f.write("="*50 + "\n")
-                    f.write(f"视频文件: {args.video_path}\n")
-                    f.write(f"Prompt: {args.prompt}\n")
-                    f.write(f"帧数: {frames.shape[0]}\n")
-                    f.write(f"实际嵌密容量: {target_bpf} bpf\n") # 修正这里
-                    f.write(f"比对基准容量: {embed_capacity} bpf\n\n")
+                    f.write(f"视频文件: {args.video_path}\n")f.write(f"视频文件: {args.video_path}\n")
+                    f.write(f"Prompt: {args.prompt}\n")f.write(f"Prompt: {args.prompt}\n")
+                    f.write(f"帧数: {frames.shape[0]}\n")f.write(f"帧数: {frames.shape[0]}\n")
+                    f.write(f"实际嵌密容量: {target_bpf} bpf\n") # 修正这里f.write(f"实际嵌密容量: {target_bpf} bpf\n") # 修正这里
+                    f.write(f"比对基准容量: {embed_capacity} bpf\n\n")f.write(f"比对基准容量: {embed_capacity} bpf\n\n")
                     
-                    f.write("评估指标:\n")
-                    for metric, value in evaluation_results.items():
-                        f.write(f"  {metric}: {value:.4f}\n")
+                    f.write("评估指标:\n")   f.write("评估指标:\n")
+                    for metric, value in evaluation_results.items():对于度量，evaluation_results.items（）中的值：对于度量，evaluation_results.items（）中的值：
+                        f.write(f"  {metric}: {value:.4f}\n")F.write （f" {metric}: {value:.4f}\n"）
                     
-                    if comparison_data:
-                        f.write("\n与论文结果比对:\n")
-                        for item in comparison_data:
-                            f.write(f"  {item['metric']}:\n")
-                            f.write(f"    论文基准: {item['paper']:.4f}\n")
-                            f.write(f"    我们的结果: {item['ours']:.4f}\n")
-                            f.write(f"    差异: {item['diff']:+.4f} ({item['diff_pct']:+.2f}%)\n")
-                            f.write(f"    状态: {item['status']}\n")
+                    if comparison_data:   如果comparison_data:
+                        f.write("\n与论文结果比对:\n")   f.write("\n与论文结果比对:\n")
+                        for item in comparison_data:对于comparison_data中的项：对于comparison_data中的项：
+                            f.write(f"  {item['metric']}:\n")f.write(f"  {item['metric']}:\n")
+                            f.write(f"    论文基准: {item['paper']:.4f}\n")f.write(f"    论文基准: {item['paper']:.4f}\n")
+                            f.write(f"    我们的结果: {item['ours']:.4f}\n")f.write(f"    我们的结果: {item['ours']:.4f}\n")
+                            f.write(f"    差异: {item['diff']:+.4f} ({item['diff_pct']:+.2f}%)\n")f.write(f"    差异: {item['diff']: .4f} ({item['diff_pct']: .2f}%)\n")
+                            f.write(f"    状态: {item['status']}\n")f.write(f"    状态: {item['status']}\n")
                 
-                print(f"\n评估结果已保存到: {eval_output_file}")
-            else:
+                print(f"\n评估结果已保存到: {eval_output_file}")print(f"\n评估结果已保存到: {eval_output_file}")
+            else:   其他:   其他:
                 print("评估结果为空或无法计算嵌密容量")
-        else:
+        else:   其他:   其他:
             print("无法读取视频帧，跳过质量评估")
     
     print("\n" + "="*50)
     print("程序执行完成")
     print("="*50)
 
-if __name__ == "__main__":
+if __name__ == "__main__":如果__name__ == "__main__"；
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--inference-config", type=str, default="configs/inference/inference-v1.yaml")
