@@ -360,7 +360,8 @@ def main(args):
                 width=model_config.W, 
                 video_length=model_config.L,
                 channels=4,                    # 新增
-                downsample_factor=8            # 新增
+                downsample_factor=8,           # 新增
+                key=args.key
             )
             
             # (C) 生成噪声
@@ -381,7 +382,7 @@ def main(args):
 
             config_save_path = f"{savedir}/stego_config.txt"
             with open(config_save_path, 'w') as f:
-                f.write(f"key={42}\n")  # 与提取方共享的密钥
+                f.write(f"key={args.key}\n")  # <--- [修改] 动态记录生成的密钥
                 # [修改] 这里的 msg_len 应该是实际嵌入的长度 (target_bpf * frames)
                 real_msg_len = int(args.target_bpf * model_config.L)
                 f.write(f"msg_len={real_msg_len}\n") 
@@ -475,12 +476,13 @@ def main(args):
 # 当你运行命令时，Python解释器首先执行这个文件
 if __name__ == "__main__": 
     # 第一步：命令行参数解析
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser()Parser = argparse.ArgumentParser（）
     parser.add_argument("--pretrained-model-path", type=str, default="runwayml/stable-diffusion-v1-5")   #用了HuggingFace模型云端 ID 而不是本地路径
     parser.add_argument("--inference-config",      type=str, default="configs/inference/inference-v1.yaml") #默认 inference-v1.yaml配置   （采样器、动态图参数）负责怎么采样，怎么生成多帧动画，加载什么 Motion Module等等
     parser.add_argument("--config",                type=str, required=True)# 接收命令行的配置信息，比如：configs/prompts/1_animate/1_3_animate_ToonYou.yaml
     
     parser.add_argument("--secret-text", type=str, default="", help="Secret message to embed")
+    parser.add_argument("--key", type=int, default=42, help="共享密钥 (伪随机置乱种子)")
 
     parser.add_argument("--L", type=int, default=16 )  #视频长度/帧数
     parser.add_argument("--W", type=int, default=512)  #图像宽度
