@@ -123,7 +123,7 @@ class StegoProcessor:
         
         # 1. DCT 变换 & 2. 展平 (保持不变)
         recovered_m = np.zeros_like(latents_np)
-        for c in range(self.channels):
+        for c in range(self.channels):对于范围内的c (self.channels)：
             for f in range(self.frames):
                 recovered_m[0, c, f] = self._dct2_2d(latents_np[0, c, f])
         flattened_signal = recovered_m.flatten()
